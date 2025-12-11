@@ -1,0 +1,79 @@
+trigger:
+- main
+
+stages:
+
+# -----------------------
+# BUILD STAGE
+# -----------------------
+- stage: Build
+  displayName: "Build Website"
+  jobs:
+  - job: BuildJob
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: 'src'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/site.zip'
+        replaceExistingArchive: true
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)'
+        artifactName: 'drop'
+
+# -----------------------
+# DEPLOY TO DEV
+# -----------------------
+- stage: Deploy_Dev
+  displayName: "Deploy to Dev Storage"
+  dependsOn: Build
+  jobs:
+  - job: DeployDevJob
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'MyServiceConnection'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az storage blob upload-batch \
+            --account-name <DEV_STORAGE_NAME> \
+            --destination '$web' \
+            --source $(Pipeline.Workspace)/drop \
+            --pattern *.zip \
+            --overwrite true
+
+# -----------------------
+# DEPLOY TO PROD
+# -----------------------
+- stage: Deploy_Prod
+  displayName: "Deploy to Production"
+  dependsOn: Deploy_Dev
+  condition: succeeded()
+  jobs:
+
+  - deployment: ProdDeployment
+    environment: "production"
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: 'MyServiceConnection'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az storage blob upload-batch \
+                  --account-name <PROD_STORAGE_NAME> \
+                  --destination '$web' \
+                  --source $(Pipeline.Workspace)/drop \
+                  --pattern *.zip \
+                  --overwrite true
